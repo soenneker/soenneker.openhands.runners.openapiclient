@@ -16,6 +16,7 @@ using Soenneker.Utils.Directory.Abstract;
 using Soenneker.Utils.File.Abstract;
 using Soenneker.Utils.File.Download.Abstract;
 using System.Collections.Generic;
+using Soenneker.OpenApi.Fixer.Abstract;
 
 namespace Soenneker.OpenHands.Runners.OpenApiClient.Utils;
 
@@ -27,18 +28,20 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
     private readonly IGitUtil _gitUtil;
     private readonly IDotnetUtil _dotnetUtil;
     private readonly IKiotaUtil _kiotaUtil;
+    private readonly IOpenApiFixer _openApiFixer;
     private readonly IFileDownloadUtil _fileDownloadUtil;
     private readonly IFileUtil _fileUtil;
     private readonly IDirectoryUtil _directoryUtil;
 
     public FileOperationsUtil(ILogger<FileOperationsUtil> logger, IConfiguration configuration, IGitUtil gitUtil, IDotnetUtil dotnetUtil,
-        IFileDownloadUtil fileDownloadUtil, IFileUtil fileUtil, IDirectoryUtil directoryUtil, IKiotaUtil kiotaUtil)
+        IFileDownloadUtil fileDownloadUtil, IFileUtil fileUtil, IDirectoryUtil directoryUtil, IKiotaUtil kiotaUtil, IOpenApiFixer openApiFixer)
     {
         _logger = logger;
         _configuration = configuration;
         _gitUtil = gitUtil;
         _dotnetUtil = dotnetUtil;
         _kiotaUtil = kiotaUtil;
+        _openApiFixer = openApiFixer;
         _fileDownloadUtil = fileDownloadUtil;
         _fileUtil = fileUtil;
         _directoryUtil = directoryUtil;
@@ -57,13 +60,20 @@ public sealed class FileOperationsUtil : IFileOperationsUtil
         string? filePath = await _fileDownloadUtil.Download(openApiDocumentUrl,
             targetFilePath, fileExtension: ".json", cancellationToken: cancellationToken);
 
+        if (filePath == null)
+            throw new InvalidOperationException("OpenHands OpenAPI document download failed.");
+
+        string fixedFilePath = Path.Combine(gitDirectory, "openapi.fixed.json");
+        await _fileUtil.DeleteIfExists(fixedFilePath, cancellationToken: cancellationToken);
+        await _openApiFixer.Fix(filePath, fixedFilePath, cancellationToken);
+
         await _kiotaUtil.EnsureInstalled(cancellationToken);
 
         string srcDirectory = Path.Combine(gitDirectory, "src", Constants.Library);
 
         await DeleteAllExceptCsproj(srcDirectory, cancellationToken);
 
-        await _kiotaUtil.Generate(filePath, "OpenHandsOpenApiClient", Constants.Library, gitDirectory, cancellationToken).NoSync();
+        await _kiotaUtil.Generate(fixedFilePath, "OpenHandsOpenApiClient", Constants.Library, gitDirectory, cancellationToken).NoSync();
 
         await BuildAndPush(gitDirectory, cancellationToken).NoSync();
     }
